@@ -27,6 +27,8 @@
 !/CUTOVER.md
 !/files/check_api.py
 !/tests/test_safety.py
+!/tests/test_effort_mapping.py
+!/tests/run_mamba_retention_regression.py
 
 # --- launcher support and patch generators -----------------------------
 !/files/memwatch.sh
@@ -37,6 +39,8 @@
 !/files/patch_qsa_fp8_kv.py
 !/files/patch_mtp_draft_vocab.py
 !/files/patch_anthropic_effort.py
+!/files/patch_mamba_retention.py
+!/files/vllm-54713.patch
 # builds the reduced draft vocabulary the MTP patch reads. Its output is a
 # generated artifact and lives in ~/.cache/vllm/draft_vocab/, not here.
 !/files/build_draft_vocab.py

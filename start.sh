@@ -98,7 +98,7 @@ _CLI_KV_CACHE_DTYPE="${KV_CACHE_DTYPE:-}"
 # Knobs that are NOT read through an explicit _CLI_ variable above still have
 # to honour "environment > .env": sourcing .env would otherwise overwrite them.
 # Snapshot anything set in the environment, then restore it after the source.
-_ENV_SNAPSHOT_VARS=(KV_TARGET_GIB HOST_RESERVE_GIB HOST_SLACK_GIB OS_RESERVE_GIB
+_ENV_SNAPSHOT_VARS=(MAMBA_SSM_CACHE_DTYPE KV_TARGET_GIB HOST_RESERVE_GIB HOST_SLACK_GIB OS_RESERVE_GIB
                     MEMWATCH_MIN_GIB MEMWATCH_MIN_FREE_GIB MEMWATCH_FREE_GATE_GIB MEMWATCH_GRACE
                     OVERHEAD_GIB PLE_GIB CONTAINER_MEM_GIB KV_CACHE_MEMORY
                     IMAGE SERVED_MODEL_NAME CUDAGRAPH_MODE HF_TOKEN TP1_MODEL_REVISION BIND_HOST API_KEY_FILE
@@ -146,6 +146,11 @@ MAX_NUM_SEQS="${_CLI_MAX_NUM_SEQS:-${MAX_NUM_SEQS:-4}}"
 MAX_NUM_BATCHED_TOKENS="${_CLI_MAX_NUM_BATCHED_TOKENS:-${MAX_NUM_BATCHED_TOKENS:-2048}}"
 MTP_NUM_SPECULATIVE_TOKENS="${_CLI_MTP:-${MTP_NUM_SPECULATIVE_TOKENS:-0}}"
 KV_CACHE_DTYPE="${_CLI_KV_CACHE_DTYPE:-${KV_CACHE_DTYPE:-auto}}"
+MAMBA_SSM_CACHE_DTYPE="${MAMBA_SSM_CACHE_DTYPE-bfloat16}"
+case "$MAMBA_SSM_CACHE_DTYPE" in
+    ""|bfloat16|float32) ;;
+    *) err "MAMBA_SSM_CACHE_DTYPE must be empty, bfloat16 or float32" ;;
+esac
 KV_CACHE_MEMORY="${KV_CACHE_MEMORY:-}"          # optional hard pin, bytes
 # Runtime overhead on top of weights, GiB (measured at TP1: 3.37+1.92+0.12).
 OVERHEAD_GIB="${OVERHEAD_GIB:-5.6}"
@@ -486,8 +491,18 @@ extract() {  # <path-in-image> <dest>
 PATCHED_PLE="$SCRIPT_DIR/files/ple_layer_patched.py"
 ANTHROPIC_PKG="$VLLM_PKG/entrypoints/anthropic/serving.py"
 PATCHED_ANTHROPIC="$SCRIPT_DIR/files/anthropic_serving_patched.py"
+ANTHROPIC_PROTOCOL_PKG="$VLLM_PKG/entrypoints/anthropic/protocol.py"
+PATCHED_ANTHROPIC_PROTOCOL="$SCRIPT_DIR/files/anthropic_protocol_patched.py"
 extract "$ANTHROPIC_PKG" "$PATCHED_ANTHROPIC.orig"
+extract "$ANTHROPIC_PROTOCOL_PKG" "$PATCHED_ANTHROPIC_PROTOCOL.orig"
 python3 "$SCRIPT_DIR/files/patch_anthropic_effort.py"
+MAMBA_MANAGER_PKG="$VLLM_PKG/v1/core/single_type_kv_cache_manager.py"
+CACHE_COORDINATOR_PKG="$VLLM_PKG/v1/core/kv_cache_coordinator.py"
+PATCHED_MAMBA_MANAGER="$SCRIPT_DIR/files/single_type_kv_cache_manager_54713.py"
+PATCHED_CACHE_COORDINATOR="$SCRIPT_DIR/files/kv_cache_coordinator_54713.py"
+extract "$MAMBA_MANAGER_PKG" "$SCRIPT_DIR/files/single_type_kv_cache_manager_54713.orig"
+extract "$CACHE_COORDINATOR_PKG" "$SCRIPT_DIR/files/kv_cache_coordinator_54713.orig"
+python3 "$SCRIPT_DIR/files/patch_mamba_retention.py"
 extract "$PLE_PKG" "$SCRIPT_DIR/files/ple_layer_patched.py.orig"
 python3 "$SCRIPT_DIR/files/patch_ple_layer.py"
 [[ -f "$PATCHED_PLE" ]] || err "PLE patch missing after patch_ple_layer.py"
@@ -548,6 +563,7 @@ VLLM_ARGS+=("--max-num-seqs" "$MAX_NUM_SEQS")
 VLLM_ARGS+=("--max-num-batched-tokens" "$MAX_NUM_BATCHED_TOKENS")
 VLLM_ARGS+=("--max-model-len" "$MAX_MODEL_LEN")
 VLLM_ARGS+=("--kv-cache-dtype" "$KV_CACHE_DTYPE")
+[[ -n "$MAMBA_SSM_CACHE_DTYPE" ]] && VLLM_ARGS+=("--mamba-ssm-cache-dtype" "$MAMBA_SSM_CACHE_DTYPE")
 if [[ -n "$YARN_FACTOR" ]]; then
     # Deep-merged into text_config.rope_parameters, which is what this model
     # reads (nvidia/qsa.py) and what vLLM's max-len check scales by. The
@@ -641,6 +657,7 @@ docker run \\
     --memory ${CONTAINER_MEM_GIB}g --memory-swap ${CONTAINER_MEM_GIB}g \\
     -e HF_HUB_OFFLINE=1 \\
     -e TRANSFORMERS_OFFLINE=1 \\
+    -e VLLM_USE_V2_MODEL_RUNNER=1 \\
     -e VLLM_PLE_CPU_OFFLOAD=1 \\
     -e VLLM_PLE_PACKED_TABLE_DIR=$PLE_CACHE_CTR \\
     -e VLLM_PLE_OFFLOAD_STEP_TIMEOUT=300 \\
@@ -649,7 +666,10 @@ docker run \\
     -e HF_HOME=/root/.cache/huggingface \\
     -e VLLM_API_KEY \\
     ${HF_TOKEN:+-e HF_TOKEN} \\
+    -v $PATCHED_MAMBA_MANAGER:$MAMBA_MANAGER_PKG:ro \\
+    -v $PATCHED_CACHE_COORDINATOR:$CACHE_COORDINATOR_PKG:ro \\
     -v $PATCHED_ANTHROPIC:$ANTHROPIC_PKG:ro \\
+    -v $PATCHED_ANTHROPIC_PROTOCOL:$ANTHROPIC_PROTOCOL_PKG:ro \\
     -v $PATCHED_PLE:$PLE_PKG:ro \\
     -v $PATCHED_MODELOPT:$MODELOPT_PKG:ro \\
     -v $PATCHED_QSA_OPS:$QSA_OPS_PKG:ro \\
