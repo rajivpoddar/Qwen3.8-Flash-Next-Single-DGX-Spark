@@ -24,6 +24,9 @@
 !/download.sh
 !/start.sh
 !/stop.sh
+!/CUTOVER.md
+!/files/check_api.py
+!/tests/test_safety.py
 
 # --- launcher support and patch generators -----------------------------
 !/files/memwatch.sh

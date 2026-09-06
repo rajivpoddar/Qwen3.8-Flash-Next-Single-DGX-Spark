@@ -33,12 +33,16 @@ done
 
 # Environment wins over .env, same precedence rule as start.sh.
 _CLI_HF_TOKEN="${HF_TOKEN:-}"
+_CLI_REVISION="${TP1_MODEL_REVISION:-}"
 if [[ -f .env ]]; then
     # shellcheck source=.env
     source .env
 fi
 [[ -n "$_CLI_HF_TOKEN" ]] && HF_TOKEN="$_CLI_HF_TOKEN"
 HF_TOKEN="${HF_TOKEN:-}"
+export HF_TOKEN
+MODEL_REVISION="${_CLI_REVISION:-${TP1_MODEL_REVISION:-}}"
+[[ "$MODEL_REVISION" =~ ^[0-9a-f]{40}$ ]] || err "Set TP1_MODEL_REVISION to a full commit SHA"
 
 MODEL_ID="${1:-${TP1_MODEL_ID:-Mia-AiLab/Qwen3.8-Flash-Next-NVFP4}}"
 HF_CACHE_DIR="${HF_HOME:-$HOME/.cache/huggingface}"
@@ -67,7 +71,7 @@ info "Cache:  $HF_CACHE_DIR"
 # Already complete? Require every shard named by the safetensors index. A
 # config.json appears early in a partial download and is not sufficient.
 if [[ -d "$MODEL_PATH" ]]; then
-    SNAP="$(ls "$MODEL_PATH/snapshots" 2>/dev/null | head -1 || true)"
+    SNAP="$MODEL_REVISION"
     if [[ -n "$SNAP" ]] && snapshot_complete "$MODEL_PATH/snapshots/$SNAP"; then
         ok "Already in cache: $MODEL_PATH ($(du -sh "$MODEL_PATH" 2>/dev/null | cut -f1))"
         info "Nothing to do. Run ./start.sh next."
@@ -90,7 +94,7 @@ DL_PY='
 import os, sys
 from huggingface_hub import snapshot_download
 p = snapshot_download(
-    repo_id=sys.argv[1],
+    repo_id=sys.argv[1], revision=sys.argv[2],
     token=(os.environ.get("HF_TOKEN") or None),
     max_workers=4,
 )
@@ -99,19 +103,19 @@ print(p)
 
 info "Downloading (resumable; interrupt and rerun to continue)..."
 if python3 -c "import huggingface_hub" 2>/dev/null; then
-    HF_HOME="$HF_CACHE_DIR" HF_TOKEN="$HF_TOKEN" python3 -c "$DL_PY" "$MODEL_ID"
+    HF_HOME="$HF_CACHE_DIR" HF_TOKEN="$HF_TOKEN" python3 -c "$DL_PY" "$MODEL_ID" "$MODEL_REVISION"
 else
     info "huggingface_hub not on the host; using the container image instead."
     IMAGE="${IMAGE:-vllm/vllm-openai:qwen38-flash-next}"
     docker run --rm -i \
-        -e HF_HOME=/hf -e HF_TOKEN="$HF_TOKEN" \
+        -e HF_HOME=/hf -e HF_TOKEN \
         -v "$HF_CACHE_DIR:/hf" \
-        --entrypoint python3 "$IMAGE" -c "$DL_PY" "$MODEL_ID"
+        --entrypoint python3 "$IMAGE" -c "$DL_PY" "$MODEL_ID" "$MODEL_REVISION"
 fi
 
 # Verify exactly what start.sh will look for, so a broken download fails here.
 [[ -d "$MODEL_PATH" ]] || err "Download finished but $MODEL_PATH is missing."
-SNAP="$(ls "$MODEL_PATH/snapshots" 2>/dev/null | head -1 || true)"
+SNAP="$MODEL_REVISION"
 [[ -n "$SNAP" ]] || err "No snapshot directory under $MODEL_PATH/snapshots"
 snapshot_complete "$MODEL_PATH/snapshots/$SNAP" || err "Snapshot is missing one or more indexed weight shards — the download is incomplete. Rerun this script."
 

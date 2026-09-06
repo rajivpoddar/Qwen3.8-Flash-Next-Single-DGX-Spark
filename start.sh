@@ -101,7 +101,7 @@ _CLI_KV_CACHE_DTYPE="${KV_CACHE_DTYPE:-}"
 _ENV_SNAPSHOT_VARS=(KV_TARGET_GIB HOST_RESERVE_GIB HOST_SLACK_GIB OS_RESERVE_GIB
                     MEMWATCH_MIN_GIB MEMWATCH_MIN_FREE_GIB MEMWATCH_FREE_GATE_GIB MEMWATCH_GRACE
                     OVERHEAD_GIB PLE_GIB CONTAINER_MEM_GIB KV_CACHE_MEMORY
-                    IMAGE SERVED_MODEL_NAME CUDAGRAPH_MODE HF_TOKEN
+                    IMAGE SERVED_MODEL_NAME CUDAGRAPH_MODE HF_TOKEN TP1_MODEL_REVISION BIND_HOST API_KEY_FILE
                     CUDAGRAPH_CAPTURE_SIZES COMPILATION_MODE MTP_K_SCHEDULE
                     MTP_DRAFT_VOCAB
                     EXTRA_VLLM_ARGS EXTRA_DOCKER_ARGS NATIVE_MAX_MODEL_LEN
@@ -213,13 +213,25 @@ MTP_DRAFT_VOCAB="${MTP_DRAFT_VOCAB:-}"
 COMPILATION_MODE="${COMPILATION_MODE:-0}"
 
 DO_LAUNCH=true
+PREFLIGHT=false
 for arg in "$@"; do
     case "$arg" in
         --no-launch) DO_LAUNCH=false ;;
+        --preflight) DO_LAUNCH=false; PREFLIGHT=true ;;
         -h|--help)   sed -n '1,60p' "$0"; exit 0 ;;
         *)           err "Unknown argument: $arg (try --help)" ;;
     esac
 done
+
+MODEL_REVISION="${TP1_MODEL_REVISION:?Set TP1_MODEL_REVISION}"
+[[ "$MODEL_REVISION" =~ ^[0-9a-f]{40}$ ]] || err "Expected a full model commit SHA"
+BIND_HOST="${BIND_HOST:-127.0.0.1}"
+python3 -c 'import ipaddress,sys; a=ipaddress.IPv4Address(sys.argv[1]); sys.exit(a.is_unspecified or a.is_multicast)' "$BIND_HOST" || err "Bind to an explicit unicast IPv4 address"
+API_KEY_FILE="${API_KEY_FILE:?Set API_KEY_FILE}"
+[[ -r "$API_KEY_FILE" && -s "$API_KEY_FILE" ]] || err "API key file missing or unreadable"
+export VLLM_API_KEY HF_TOKEN
+VLLM_API_KEY="$(<"$API_KEY_FILE")"
+[[ -n "$VLLM_API_KEY" && "$VLLM_API_KEY" != *$'\n'* && "$VLLM_API_KEY" != *$'\r'* ]] || err "Invalid API key file"
 
 if ! [[ "$MAX_MODEL_LEN" =~ ^[1-9][0-9]*$ ]]; then
     err "MAX_MODEL_LEN must be a positive integer (got: '$MAX_MODEL_LEN')"
@@ -281,7 +293,7 @@ ORG="${MODEL_ID%%/*}"; NAME="${MODEL_ID##*/}"
 MODEL_PATH="$HF_CACHE_DIR/hub/models--${ORG}--${NAME}"
 [[ -d "$MODEL_PATH" ]] || err "Checkpoint not in cache: $MODEL_PATH
        Fetch it first:  ./download.sh $MODEL_ID"
-SNAPSHOT_REL="snapshots/$(ls "$MODEL_PATH/snapshots" | head -1)"
+SNAPSHOT_REL="snapshots/$MODEL_REVISION"
 [[ -f "$MODEL_PATH/$SNAPSHOT_REL/config.json" ]] || err "No snapshot under $MODEL_PATH/snapshots"
 python3 - "$MODEL_PATH/$SNAPSHOT_REL" <<'PY' || err "Checkpoint snapshot is incomplete. Resume it with: ./download.sh $MODEL_ID"
 import json
@@ -301,6 +313,12 @@ ok "$MODEL_ID  ($(du -sh "$MODEL_PATH" 2>/dev/null | cut -f1))"
 # ---------------------------------------------------------------------------
 # 2. Co-tenant guard + memory budget.
 # ---------------------------------------------------------------------------
+if $PREFLIGHT; then
+    docker image inspect "$IMAGE" >/dev/null 2>&1 || err "Pinned image not cached; no pull attempted"
+    ok "Read-only preflight passed. No inference or PLE build started."
+    exit 0
+fi
+
 COTENANT=$(systemctl is-active comfy-h3.service 2>/dev/null || true)
 if pgrep -f "ComfyUI/main.py" >/dev/null 2>&1; then
     err "ComfyUI (comfy-h3) is RUNNING and holds GPU memory. It cannot coexist
@@ -625,7 +643,8 @@ docker run \\
     ${MTP_DRAFT_VOCAB:+-v $MTP_DRAFT_VOCAB:/root/draft_vocab.txt:ro} \\
     ${MTP_DRAFT_VOCAB:+-e VLLM_MTP_DRAFT_VOCAB=/root/draft_vocab.txt} \\
     -e HF_HOME=/root/.cache/huggingface \\
-    ${HF_TOKEN:+-e HF_TOKEN=$HF_TOKEN} \\
+    -e VLLM_API_KEY \\
+    ${HF_TOKEN:+-e HF_TOKEN} \\
     -v $PATCHED_PLE:$PLE_PKG:ro \\
     -v $PATCHED_MODELOPT:$MODELOPT_PKG:ro \\
     -v $PATCHED_QSA_OPS:$QSA_OPS_PKG:ro \\
@@ -640,8 +659,9 @@ docker run \\
     $EXTRA_DOCKER_ARGS \\
     $IMAGE \\
     $MODEL_ID \\
+    --revision $MODEL_REVISION \\
     $VLLM_ARGS_STR \\
-    --host 0.0.0.0 \\
+    --host $BIND_HOST \\
     --port $PORT
 LAUNCH_EOF
 chmod +x "$LAUNCH_SCRIPT"
@@ -702,8 +722,7 @@ while true; do
         fi
         err "Container exited. Full logs: docker logs $CONTAINER_NAME"
     fi
-    CODE=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:$PORT/health" 2>/dev/null || echo "000")
-    if [[ "$CODE" == "200" ]]; then
+    if python3 "$SCRIPT_DIR/files/check_api.py" "http://$BIND_HOST:$PORT" "$SERVED_MODEL_NAME"; then
         kill $LOGPID 2>/dev/null || true
         echo ""
         ok "vLLM ready on port $PORT (TP=1, single Spark)."

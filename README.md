@@ -1,5 +1,10 @@
 <h1 align="center">Qwen3.8-Flash-Next on ONE DGX Spark (TP=1)</h1>
 
+> HeyDonna fork: see [preparation and cutover notes](CUTOVER.md) for pinned
+> assets, authenticated port 30000 serving and `./start.sh --preflight`.
+> Live runtime validation is pending. Upstream documentation below describes
+> its original defaults; this fork's `.env.sample` is authoritative.
+
 <p align="center">
   <sub>by <a href="https://x.com/MiaAI_lab">Mia'a AI Lab</a></sub>
   <br><br>
