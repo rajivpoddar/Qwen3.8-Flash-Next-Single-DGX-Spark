@@ -8,6 +8,16 @@ generated command text. Protect the host Docker socket as privileged access.
 
 ## Prepare without disruption
 
+### Claude effort policy
+
+The Anthropic adapter patch pins requests for served model
+`qwen3.8-flash-next` to `low`, including missing effort and auxiliary requests
+that send `high`. The checkpoint rejects `high`; it accepts low, medium and
+xhigh. Other model IDs retain upstream behavior. This is a deliberate low-only
+deployment policy, not thinking-off. `start.sh` regenerates and mounts the patch;
+changes require a service restart. Slot launchers also export
+`CLAUDE_CODE_EFFORT_LEVEL=low` alongside `--effort low`.
+
 Copy `.env.sample` to `.env` and verify the host address and key-file path.
 Run `./start.sh --preflight`. This only validates configuration, the exact cached
 checkpoint and a locally cached image. Missing assets cause failure; it never

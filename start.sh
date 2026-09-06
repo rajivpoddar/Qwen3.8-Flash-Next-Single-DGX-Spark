@@ -484,6 +484,10 @@ extract() {  # <path-in-image> <dest>
     fi
 }
 PATCHED_PLE="$SCRIPT_DIR/files/ple_layer_patched.py"
+ANTHROPIC_PKG="$VLLM_PKG/entrypoints/anthropic/serving.py"
+PATCHED_ANTHROPIC="$SCRIPT_DIR/files/anthropic_serving_patched.py"
+extract "$ANTHROPIC_PKG" "$PATCHED_ANTHROPIC.orig"
+python3 "$SCRIPT_DIR/files/patch_anthropic_effort.py"
 extract "$PLE_PKG" "$SCRIPT_DIR/files/ple_layer_patched.py.orig"
 python3 "$SCRIPT_DIR/files/patch_ple_layer.py"
 [[ -f "$PATCHED_PLE" ]] || err "PLE patch missing after patch_ple_layer.py"
@@ -645,6 +649,7 @@ docker run \\
     -e HF_HOME=/root/.cache/huggingface \\
     -e VLLM_API_KEY \\
     ${HF_TOKEN:+-e HF_TOKEN} \\
+    -v $PATCHED_ANTHROPIC:$ANTHROPIC_PKG:ro \\
     -v $PATCHED_PLE:$PLE_PKG:ro \\
     -v $PATCHED_MODELOPT:$MODELOPT_PKG:ro \\
     -v $PATCHED_QSA_OPS:$QSA_OPS_PKG:ro \\
