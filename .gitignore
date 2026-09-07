@@ -25,8 +25,10 @@
 !/start.sh
 !/stop.sh
 !/CUTOVER.md
+!/CACHE_DIAGNOSTICS.md
 !/files/check_api.py
 !/tests/test_safety.py
+!/tests/test_hit_debug.py
 !/tests/test_effort_mapping.py
 !/tests/run_mamba_retention_regression.py
 
@@ -40,6 +42,15 @@
 !/files/patch_mtp_draft_vocab.py
 !/files/patch_anthropic_effort.py
 !/files/patch_mamba_retention.py
+!/files/patch_hit_debug.py
+!/files/patch_mamba_geometry.py
+!/files/retention_policy.py
+!/files/patch_soft_retention.py
+!/tests/test_soft_retention.py
+!/tests/test_retention_runtime.py
+!/SOFT_RETENTION.md
+!/tests/test_mamba_geometry.py
+!/tests/probe_cache_geometry.py
 !/files/vllm-54713.patch
 # builds the reduced draft vocabulary the MTP patch reads. Its output is a
 # generated artifact and lives in ~/.cache/vllm/draft_vocab/, not here.

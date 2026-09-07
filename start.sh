@@ -503,6 +503,36 @@ PATCHED_CACHE_COORDINATOR="$SCRIPT_DIR/files/kv_cache_coordinator_54713.py"
 extract "$MAMBA_MANAGER_PKG" "$SCRIPT_DIR/files/single_type_kv_cache_manager_54713.orig"
 extract "$CACHE_COORDINATOR_PKG" "$SCRIPT_DIR/files/kv_cache_coordinator_54713.orig"
 python3 "$SCRIPT_DIR/files/patch_mamba_retention.py"
+extract "$VLLM_PKG/v1/core/sched/scheduler.py" "$SCRIPT_DIR/files/scheduler.orig"
+extract "$VLLM_PKG/v1/worker/gpu/model_states/mamba_hybrid.py" "$SCRIPT_DIR/files/mamba_hybrid.orig"
+extract "$VLLM_PKG/v1/worker/gpu/model_states/interface.py" "$SCRIPT_DIR/files/interface.orig"
+extract "$VLLM_PKG/v1/worker/gpu/model_runner.py" "$SCRIPT_DIR/files/model_runner.orig"
+python3 "$SCRIPT_DIR/files/patch_mamba_geometry.py"
+PATCHED_SCHEDULER="$SCRIPT_DIR/files/scheduler_geometry.py"
+MAMBA_GEOMETRY_MOUNTS="-v $SCRIPT_DIR/files/mamba_hybrid_geometry.py:$VLLM_PKG/v1/worker/gpu/model_states/mamba_hybrid.py:ro -v $SCRIPT_DIR/files/interface_geometry.py:$VLLM_PKG/v1/worker/gpu/model_states/interface.py:ro -v $SCRIPT_DIR/files/model_runner_geometry.py:$VLLM_PKG/v1/worker/gpu/model_runner.py:ro"
+HIT_DEBUG_MOUNTS=""
+RETENTION_POOL_SOURCE=block_pool.orig
+if [[ "${VLLM_HIT_DEBUG:-0}" == "1" ]]; then
+    extract "$VLLM_PKG/v1/core/sched/scheduler.py" "$SCRIPT_DIR/files/scheduler.orig"
+    extract "$VLLM_PKG/v1/core/block_pool.py" "$SCRIPT_DIR/files/block_pool.orig"
+    HIT_DEBUG_SCHEDULER=scheduler_geometry.py python3 "$SCRIPT_DIR/files/patch_hit_debug.py"
+    PATCHED_SCHEDULER="$SCRIPT_DIR/files/scheduler_hit_debug.py"
+    PATCHED_MAMBA_MANAGER="$SCRIPT_DIR/files/manager_hit_debug.py"
+    PATCHED_CACHE_COORDINATOR="$SCRIPT_DIR/files/coordinator_hit_debug.py"
+    HIT_DEBUG_MOUNTS="-e VLLM_HIT_DEBUG=1 -v $SCRIPT_DIR/files/pool_hit_debug.py:$VLLM_PKG/v1/core/block_pool.py:ro"
+    RETENTION_POOL_SOURCE=pool_hit_debug.py
+fi
+SOFT_RETENTION_MOUNTS=""
+if [[ "${VLLM_AGENT_SOFT_RETENTION:-0}" == "1" ]]; then
+    extract "$VLLM_PKG/v1/core/block_pool.py" "$SCRIPT_DIR/files/block_pool.orig"
+    extract "$VLLM_PKG/v1/request.py" "$SCRIPT_DIR/files/request.orig"
+    RETENTION_POOL_SOURCE="$RETENTION_POOL_SOURCE" RETENTION_MANAGER_SOURCE="$(basename "$PATCHED_MAMBA_MANAGER")" python3 "$SCRIPT_DIR/files/patch_soft_retention.py"
+    PATCHED_MAMBA_MANAGER="$SCRIPT_DIR/files/manager_soft_retention.py"
+    PATCHED_ANTHROPIC="$SCRIPT_DIR/files/anthropic_soft_retention.py"
+    # The final pool composes diagnostics; mount it only once.
+    HIT_DEBUG_MOUNTS="${VLLM_HIT_DEBUG:+-e VLLM_HIT_DEBUG=$VLLM_HIT_DEBUG}"
+    SOFT_RETENTION_MOUNTS="-e VLLM_AGENT_SOFT_RETENTION=1 -v $SCRIPT_DIR/files/pool_soft_retention.py:$VLLM_PKG/v1/core/block_pool.py:ro -v $SCRIPT_DIR/files/request_soft_retention.py:$VLLM_PKG/v1/request.py:ro -v $SCRIPT_DIR/files/retention_policy.py:$VLLM_PKG/v1/core/retention_policy.py:ro"
+fi
 extract "$PLE_PKG" "$SCRIPT_DIR/files/ple_layer_patched.py.orig"
 python3 "$SCRIPT_DIR/files/patch_ple_layer.py"
 [[ -f "$PATCHED_PLE" ]] || err "PLE patch missing after patch_ple_layer.py"
@@ -658,6 +688,8 @@ docker run \\
     -e HF_HUB_OFFLINE=1 \\
     -e TRANSFORMERS_OFFLINE=1 \\
     -e VLLM_USE_V2_MODEL_RUNNER=1 \\
+    $HIT_DEBUG_MOUNTS \\
+    $SOFT_RETENTION_MOUNTS \\
     -e VLLM_PLE_CPU_OFFLOAD=1 \\
     -e VLLM_PLE_PACKED_TABLE_DIR=$PLE_CACHE_CTR \\
     -e VLLM_PLE_OFFLOAD_STEP_TIMEOUT=300 \\
@@ -668,6 +700,8 @@ docker run \\
     ${HF_TOKEN:+-e HF_TOKEN} \\
     -v $PATCHED_MAMBA_MANAGER:$MAMBA_MANAGER_PKG:ro \\
     -v $PATCHED_CACHE_COORDINATOR:$CACHE_COORDINATOR_PKG:ro \\
+    -v $PATCHED_SCHEDULER:$VLLM_PKG/v1/core/sched/scheduler.py:ro \\
+    $MAMBA_GEOMETRY_MOUNTS \\
     -v $PATCHED_ANTHROPIC:$ANTHROPIC_PKG:ro \\
     -v $PATCHED_ANTHROPIC_PROTOCOL:$ANTHROPIC_PROTOCOL_PKG:ro \\
     -v $PATCHED_PLE:$PLE_PKG:ro \\
