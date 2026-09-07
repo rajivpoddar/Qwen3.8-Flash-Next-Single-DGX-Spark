@@ -80,7 +80,7 @@ class SoftRetention:
         if old and chosen["priority"] < old[1] and (scope is None or scope != old[3]):
             return
         self.entries[block.block_id] = (block.block_hash, chosen["priority"],
-                                       now + chosen["duration"], scope)
+                                       now + chosen["duration"], scope, end)
 
     def priority(self, block, now):
         entry = self.entries.get(block.block_id)
@@ -106,14 +106,20 @@ class SoftRetention:
         candidates = []
         block = queue.fake_free_list_head.next_free_block
         while block is not queue.fake_free_list_tail and len(candidates) < self.scan_limit:
-            candidates.append((self.priority(block, now), len(candidates), block))
+            priority = self.priority(block, now)
+            # Across hybrid groups, prefer discarding deep boundaries first.
+            # Group-by-group LRU can otherwise retain disconnected fragments
+            # with no common reusable prefix. Expired/unhinted blocks retain
+            # native ordering; equal priority AND position remain stable LRU.
+            end = self.entries[block.block_id][4] if priority else 0
+            candidates.append((priority, -end, len(candidates), block))
             block = block.next_free_block
         self.selections += 1
         self.scanned += len(candidates)
-        chosen = sorted(candidates, key=lambda x: (x[0], x[1]))[:count]
-        self.deferred += sum(1 for _, index, _ in chosen if index >= count)
+        chosen = sorted(candidates, key=lambda x: (x[0], x[1], x[2]))[:count]
+        self.deferred += sum(1 for _, _, index, _ in chosen if index >= count)
         result = []
-        for priority, _, block in chosen:
+        for priority, _, _, block in chosen:
             queue.remove(block)
             self.protected_evicted += int(priority > 0)
             self.entries.pop(block.block_id, None)

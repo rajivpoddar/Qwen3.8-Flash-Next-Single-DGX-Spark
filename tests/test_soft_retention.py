@@ -81,6 +81,24 @@ class RetentionTests(unittest.TestCase):
         self.assertEqual(q.items, b[:6])
         self.assertEqual(p.protected_evicted, 0)
 
+    def test_equal_priority_evicts_deepest_across_groups(self):
+        p = SoftRetention()
+        b = blocks(6)
+        for i, block in enumerate(b):
+            p.mark(block, hints(), (i % 3) * 8, (i % 3 + 1) * 8)
+        self.assertEqual(p.pop(Queue(b), 4), [b[2], b[5], b[1], b[4]])
+
+    def test_priority_beats_position_and_expired_keeps_lru(self):
+        now = [0]
+        p = SoftRetention(lambda: now[0])
+        b = blocks(3)
+        p.mark(b[0], hints(90), 0, 100)
+        p.mark(b[1], hints(70), 0, 8)
+        p.mark(b[2], hints(90), 0, 200)
+        self.assertEqual(p.pop(Queue(b), 1), [b[1]])
+        now[0] = 11
+        self.assertEqual(p.pop(Queue([b[0], b[2]]), 2), [b[0], b[2]])
+
     def test_recycled_block_and_owner_downgrade(self):
         p = SoftRetention()
         b = blocks(1)[0]

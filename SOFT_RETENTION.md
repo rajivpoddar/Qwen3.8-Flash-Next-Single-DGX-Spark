@@ -32,3 +32,35 @@ Logs contain aggregate selection counts, never prompts or metadata user IDs.
 
 Rollback: disable the env flag and restart with the preserved launcher. No model
 download, slot clearing, or cache protocol migration is needed.
+# Position-aware retention follow-up (2026-09-07)
+
+Equal retention priority now evicts deeper token endpoints before shallower
+ones across groups, then uses stable LRU for equal endpoints. Previously,
+group-by-group free ordering could leave disconnected cached fragments. The
+change adds one integer to each existing entry; TTL, priority precedence,
+bounded scanning, CoW transfer and allocation accounting are unchanged.
+
+`tests/probe_retention_interleaved.py` reproduces pressure using the actual
+pinned BlockPool and HybridKVCacheCoordinator in a CPU-only container. A
+publishes six aligned boundaries across one FA and four recurrent groups; B
+allocates from that pool. No model weights or live requests are used.
+
+| B allocation / 30 available blocks | Previous hit | Candidate hit |
+| --- | ---: | ---: |
+| 0 | 9984 | 9984 |
+| 5 | 1664 | 8320 |
+| 15 | 0 | 4992 |
+| 25 | 0 | 1664 |
+| 30 | 0 | 0 |
+
+With speculative FA back-off enabled, the 15-block pressure arm changes from
+0 to 3328 reusable tokens. Exhaustion always succeeds without hard pins.
+Nine local retention tests and the pinned-runtime Anthropic/TTL/producer and
+consumer CoW checks pass. Independent functionality review approved the delta.
+
+This is an aligned-geometry allocation/lookup reproduction, not full GPU
+inference or causal proof of the earlier live miss. It is not atomic group
+retention and makes no guarantee across arbitrary group geometry, scopes,
+scan windows, sparse retention or larger allocations. Live serving must be
+restarted through the maintenance procedure before this module takes effect;
+do not overwrite an already-imported serving module and claim deployment.
